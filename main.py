@@ -172,7 +172,7 @@ async def main():
     parser = argparse.ArgumentParser(description="Fetch options data for stocks and ETFs using async processing")
     parser.add_argument("--max-expiration-dates", "-e", type=int, default=30,
                        help="Maximum number of expiration dates per symbol")
-    parser.add_argument("--db-path", default="data/options/options_data.db",
+    parser.add_argument("--db-path", default="data/options/market_data.db",
                        help="Path to SQLite database file")
     parser.add_argument("--rate-limit", "-r", type=float, default=0.05,
                        help="Rate limit delay between requests (seconds)")

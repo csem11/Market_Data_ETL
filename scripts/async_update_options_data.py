@@ -15,8 +15,7 @@ from typing import List, Dict, Optional
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
 from src.scrapers.async_options_scraper import AsyncOptionsScraper
-from src.database import OptionsDatabase
-from src.models import StockInfo
+from src.database import OptionsDatabase, StockInfo
 
 
 def load_sp500_symbols(csv_path: str = "data/sp500_companies.csv") -> List[str]:
@@ -222,7 +221,7 @@ async def main():
     parser.add_argument("--sp500", action="store_true", help="Update all S&P 500 symbols")
     parser.add_argument("--max-expiration-dates", "-e", type=int, default=30,
                        help="Maximum number of expiration dates per symbol")
-    parser.add_argument("--db-path", default="data/options/options_data.db",
+    parser.add_argument("--db-path", default="data/options/market_data.db",
                        help="Path to SQLite database file")
     parser.add_argument("--rate-limit", "-r", type=float, default=10.0,
                        help="Rate limit per second")

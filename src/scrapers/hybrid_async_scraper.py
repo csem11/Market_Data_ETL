@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from datetime import datetime, timedelta, date
 import time
 
-from ..models import OptionsChainData, StockInfo
+from ..database.models import OptionsChainData, StockInfo
 
 
 class HybridAsyncOptionsScraper:
@@ -149,11 +149,6 @@ class HybridAsyncOptionsScraper:
                             volume=int(row.get('volume', 0)) if pd.notna(row.get('volume')) else None,
                             open_interest=int(row.get('openInterest', 0)) if pd.notna(row.get('openInterest')) else None,
                             implied_volatility=float(row.get('impliedVolatility', 0)) if pd.notna(row.get('impliedVolatility')) else None,
-                            delta=float(row.get('delta', 0)) if pd.notna(row.get('delta')) else None,
-                            gamma=float(row.get('gamma', 0)) if pd.notna(row.get('gamma')) else None,
-                            theta=float(row.get('theta', 0)) if pd.notna(row.get('theta')) else None,
-                            vega=float(row.get('vega', 0)) if pd.notna(row.get('vega')) else None,
-                            rho=float(row.get('rho', 0)) if pd.notna(row.get('rho')) else None,
                             contract_name=row.get('contractSymbol'),
                             last_trade_date=row.get('lastTradeDate'),
                             eff_date=current_date
@@ -174,11 +169,6 @@ class HybridAsyncOptionsScraper:
                             volume=int(row.get('volume', 0)) if pd.notna(row.get('volume')) else None,
                             open_interest=int(row.get('openInterest', 0)) if pd.notna(row.get('openInterest')) else None,
                             implied_volatility=float(row.get('impliedVolatility', 0)) if pd.notna(row.get('impliedVolatility')) else None,
-                            delta=float(row.get('delta', 0)) if pd.notna(row.get('delta')) else None,
-                            gamma=float(row.get('gamma', 0)) if pd.notna(row.get('gamma')) else None,
-                            theta=float(row.get('theta', 0)) if pd.notna(row.get('theta')) else None,
-                            vega=float(row.get('vega', 0)) if pd.notna(row.get('vega')) else None,
-                            rho=float(row.get('rho', 0)) if pd.notna(row.get('rho')) else None,
                             contract_name=row.get('contractSymbol'),
                             last_trade_date=row.get('lastTradeDate'),
                             eff_date=current_date

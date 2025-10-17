@@ -12,7 +12,7 @@ OPTIONS_DATA_DIR = DATA_DIR / "options"
 SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 
 # Database configuration
-DATABASE_PATH = OPTIONS_DATA_DIR / "options_data.db"
+DATABASE_PATH = OPTIONS_DATA_DIR / "market_data.db"
 
 # API configuration
 RATE_LIMIT_DELAY = 0.1  # Seconds between API calls
@@ -21,7 +21,7 @@ TIMEOUT = 30
 
 # Options data configuration
 DEFAULT_MAX_EXPIRATION_DATES = 30
-DEFAULT_DATA_RETENTION_DAYS = 30
+# DEFAULT_DATA_RETENTION_DAYS = 30  # Disabled - keeping all data
 
 # S&P 500 data
 SP500_CSV_PATH = DATA_DIR / "sp500_companies.csv"

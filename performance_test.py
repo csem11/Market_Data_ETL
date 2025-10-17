@@ -11,7 +11,7 @@ from datetime import datetime
 
 sys.path.append(os.path.dirname(__file__))
 
-from src.scrapers import OptionsScraper, HybridAsyncOptionsScraper
+from src.scrapers import YahooScraper, HybridAsyncOptionsScraper
 
 
 async def test_async_performance(symbols: list, max_expiration_dates: int = 2):
@@ -45,7 +45,7 @@ def test_sync_performance(symbols: list, max_expiration_dates: int = 2):
     """Test sync performance"""
     print(f"Testing sync performance with {len(symbols)} symbols...")
     
-    scraper = OptionsScraper(rate_limit_delay=0.1)
+    scraper = YahooScraper(rate_limit_delay=0.1)
     
     start_time = time.time()
     

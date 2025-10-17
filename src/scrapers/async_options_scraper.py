@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, date
 import time
 from asyncio_throttle import Throttler
 
-from ..models import OptionsChainData, StockInfo
+from ..database.models import OptionsChainData, StockInfo
 
 
 class AsyncOptionsScraper:
@@ -217,11 +217,6 @@ class AsyncOptionsScraper:
                     volume=int(call.get('volume', 0)) if call.get('volume') is not None else None,
                     open_interest=int(call.get('openInterest', 0)) if call.get('openInterest') is not None else None,
                     implied_volatility=float(call.get('impliedVolatility', 0)) if call.get('impliedVolatility') is not None else None,
-                    delta=float(call.get('delta', 0)) if call.get('delta') is not None else None,
-                    gamma=float(call.get('gamma', 0)) if call.get('gamma') is not None else None,
-                    theta=float(call.get('theta', 0)) if call.get('theta') is not None else None,
-                    vega=float(call.get('vega', 0)) if call.get('vega') is not None else None,
-                    rho=float(call.get('rho', 0)) if call.get('rho') is not None else None,
                     contract_name=call.get('contractSymbol'),
                     last_trade_date=datetime.fromtimestamp(call['lastTradeDate']) if call.get('lastTradeDate') else None,
                     eff_date=current_date

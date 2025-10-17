@@ -113,48 +113,10 @@ def query_high_volume_options(db: OptionsDatabase, min_volume: int = 100, limit:
             print(df.to_string(index=False))
 
 
-def query_options_by_greeks(db: OptionsDatabase, greek: str, min_value: float = None, 
-                           max_value: float = None, limit: int = 20):
-    """Query options filtered by Greek values"""
-    print(f"\n=== Options by {greek.title()} ===")
-    
-    if greek not in ['delta', 'gamma', 'theta', 'vega', 'rho']:
-        print(f"Invalid Greek: {greek}. Valid options: delta, gamma, theta, vega, rho")
-        return
-    
-    with db.get_connection() as conn:
-        query = f"""
-            SELECT symbol, expiration_date, strike_price, option_type, 
-                   last_price, {greek}, volume, open_interest
-            FROM options_chain 
-            WHERE {greek} IS NOT NULL
-        """
-        params = []
-        
-        if min_value is not None:
-            query += f" AND {greek} >= ?"
-            params.append(min_value)
-        
-        if max_value is not None:
-            query += f" AND {greek} <= ?"
-            params.append(max_value)
-        
-        query += f" ORDER BY ABS({greek}) DESC LIMIT ?"
-        params.append(limit)
-        
-        df = pd.read_sql_query(query, conn, params=params)
-        
-        if df.empty:
-            print(f"No options found with specified {greek} criteria")
-        else:
-            print(f"Found {len(df)} options:")
-            print(df.to_string(index=False))
-
-
 def main():
     """Main function to query options data"""
     parser = argparse.ArgumentParser(description="Query options chain data from SQLite database")
-    parser.add_argument("--db-path", default="data/options/options_data.db",
+    parser.add_argument("--db-path", default="data/options/market_data.db",
                        help="Path to SQLite database file")
     parser.add_argument("--symbol", "-s", help="Symbol to query")
     parser.add_argument("--expiration-date", "-e", help="Expiration date filter (YYYY-MM-DD)")
@@ -162,10 +124,6 @@ def main():
     parser.add_argument("--list-expirations", action="store_true", help="List expiration dates for symbol")
     parser.add_argument("--high-volume", type=int, metavar="MIN_VOLUME", 
                        help="Query high volume options (specify minimum volume)")
-    parser.add_argument("--greek", choices=['delta', 'gamma', 'theta', 'vega', 'rho'],
-                       help="Query options by Greek value")
-    parser.add_argument("--min-greek", type=float, help="Minimum Greek value")
-    parser.add_argument("--max-greek", type=float, help="Maximum Greek value")
     parser.add_argument("--limit", type=int, default=20, help="Limit number of results")
     parser.add_argument("--stats", action="store_true", help="Show database statistics")
     
@@ -198,11 +156,6 @@ def main():
     # Query high volume options
     if args.high_volume:
         query_high_volume_options(db, args.high_volume, args.limit)
-        return 0
-    
-    # Query by Greek values
-    if args.greek:
-        query_options_by_greeks(db, args.greek, args.min_greek, args.max_greek, args.limit)
         return 0
     
     # Query options by symbol (default behavior)

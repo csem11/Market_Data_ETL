@@ -1,5 +1,6 @@
 """
-Options chain scraper using yfinance API
+Comprehensive Yahoo Finance scraper using yfinance API
+Supports options chains, stock prices, earnings dates, and stock information
 """
 
 import yfinance as yf
@@ -8,11 +9,11 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta, date
 import time
 
-from ..models import OptionsChainData, StockInfo
+from ..database.models import OptionsChainData, StockInfo, StockPrices, EarningsDates
 
 
-class OptionsScraper:
-    """Options chain scraper using yfinance"""
+class YahooScraper:
+    """Comprehensive Yahoo Finance scraper using yfinance"""
     
     def __init__(self, rate_limit_delay: float = 0.1):
         """
@@ -146,11 +147,6 @@ class OptionsScraper:
                         volume=int(row.get('volume', 0)) if pd.notna(row.get('volume')) else None,
                         open_interest=int(row.get('openInterest', 0)) if pd.notna(row.get('openInterest')) else None,
                         implied_volatility=float(row.get('impliedVolatility', 0)) if pd.notna(row.get('impliedVolatility')) else None,
-                        delta=float(row.get('delta', 0)) if pd.notna(row.get('delta')) else None,
-                        gamma=float(row.get('gamma', 0)) if pd.notna(row.get('gamma')) else None,
-                        theta=float(row.get('theta', 0)) if pd.notna(row.get('theta')) else None,
-                        vega=float(row.get('vega', 0)) if pd.notna(row.get('vega')) else None,
-                        rho=float(row.get('rho', 0)) if pd.notna(row.get('rho')) else None,
                         contract_name=row.get('contractSymbol'),
                         last_trade_date=row.get('lastTradeDate'),
                         eff_date=current_date
@@ -171,11 +167,6 @@ class OptionsScraper:
                         volume=int(row.get('volume', 0)) if pd.notna(row.get('volume')) else None,
                         open_interest=int(row.get('openInterest', 0)) if pd.notna(row.get('openInterest')) else None,
                         implied_volatility=float(row.get('impliedVolatility', 0)) if pd.notna(row.get('impliedVolatility')) else None,
-                        delta=float(row.get('delta', 0)) if pd.notna(row.get('delta')) else None,
-                        gamma=float(row.get('gamma', 0)) if pd.notna(row.get('gamma')) else None,
-                        theta=float(row.get('theta', 0)) if pd.notna(row.get('theta')) else None,
-                        vega=float(row.get('vega', 0)) if pd.notna(row.get('vega')) else None,
-                        rho=float(row.get('rho', 0)) if pd.notna(row.get('rho')) else None,
                         contract_name=row.get('contractSymbol'),
                         last_trade_date=row.get('lastTradeDate'),
                         eff_date=current_date
@@ -261,3 +252,155 @@ class OptionsScraper:
                 time.sleep(self.rate_limit_delay * 2)
         
         return results
+    
+    def get_stock_price_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> List[StockPrices]:
+        """
+        Get stock price history for a symbol
+        
+        Args:
+            symbol: Stock symbol
+            period: Data period (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
+            interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
+            
+        Returns:
+            List of StockPrices objects
+        """
+        try:
+            self._rate_limit()
+            ticker = yf.Ticker(symbol)
+            hist = ticker.history(period=period, interval=interval)
+            
+            if hist.empty:
+                print(f"No price history data available for {symbol}")
+                return []
+            
+            stock_prices = []
+            for date, row in hist.iterrows():
+                # Convert pandas Timestamp to datetime
+                if hasattr(date, 'to_pydatetime'):
+                    date_obj = date.to_pydatetime()
+                else:
+                    date_obj = datetime.combine(date.date(), datetime.min.time())
+                
+                stock_price = StockPrices(
+                    symbol=symbol.upper(),
+                    date=date_obj,
+                    open_price=float(row['Open']) if pd.notna(row['Open']) else None,
+                    high_price=float(row['High']) if pd.notna(row['High']) else None,
+                    low_price=float(row['Low']) if pd.notna(row['Low']) else None,
+                    close_price=float(row['Close']) if pd.notna(row['Close']) else None,
+                    volume=int(row['Volume']) if pd.notna(row['Volume']) else None,
+                    adjusted_close=float(row['Close']) if pd.notna(row['Close']) else None
+                )
+                stock_prices.append(stock_price)
+            
+            print(f"Retrieved {len(stock_prices)} price history records for {symbol}")
+            return stock_prices
+            
+        except Exception as e:
+            print(f"Error fetching price history for {symbol}: {e}")
+            return []
+    
+    def get_earnings_dates(self, symbol: str) -> List[EarningsDates]:
+        """
+        Get earnings dates for a symbol
+        
+        Args:
+            symbol: Stock symbol
+            
+        Returns:
+            List of EarningsDates objects
+        """
+        try:
+            self._rate_limit()
+            ticker = yf.Ticker(symbol)
+            
+            # Get earnings dates using the earnings_dates property
+            earnings_dates = ticker.earnings_dates
+            
+            if earnings_dates is None or earnings_dates.empty:
+                print(f"No earnings dates available for {symbol}")
+                return []
+            
+            earnings_list = []
+            for date, row in earnings_dates.iterrows():
+                # Convert pandas Timestamp to datetime
+                if hasattr(date, 'to_pydatetime'):
+                    date_obj = date.to_pydatetime()
+                else:
+                    date_obj = datetime.combine(date.date(), datetime.min.time())
+                
+                # Determine earnings type based on available data
+                earnings_type = "quarterly"  # Default to quarterly
+                
+                earnings_date = EarningsDates(
+                    symbol=symbol.upper(),
+                    earnings_date=date_obj,
+                    earnings_type=earnings_type,
+                    fiscal_year=date_obj.year,
+                    fiscal_quarter=None  # Could be enhanced to determine quarter
+                )
+                earnings_list.append(earnings_date)
+            
+            print(f"Retrieved {len(earnings_list)} earnings dates for {symbol}")
+            return earnings_list
+            
+        except Exception as e:
+            print(f"Error fetching earnings dates for {symbol}: {e}")
+            return []
+    
+    def get_calendar_events(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get calendar events (earnings, dividends, splits) for a symbol
+        
+        Args:
+            symbol: Stock symbol
+            
+        Returns:
+            Dictionary with calendar events
+        """
+        try:
+            self._rate_limit()
+            ticker = yf.Ticker(symbol)
+            calendar = ticker.calendar
+            
+            if calendar is None:
+                print(f"No calendar events available for {symbol}")
+                return {}
+            
+            return {
+                'earnings': calendar.get('earnings', []),
+                'dividends': calendar.get('dividends', []),
+                'splits': calendar.get('splits', [])
+            }
+            
+        except Exception as e:
+            print(f"Error fetching calendar events for {symbol}: {e}")
+            return {}
+    
+    def get_financial_data(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get comprehensive financial data for a symbol
+        
+        Args:
+            symbol: Stock symbol
+            
+        Returns:
+            Dictionary with financial data
+        """
+        try:
+            self._rate_limit()
+            ticker = yf.Ticker(symbol)
+            
+            return {
+                'info': ticker.info,
+                'fast_info': ticker.fast_info,
+                'recommendations': ticker.recommendations,
+                'sustainability': ticker.sustainability,
+                'major_holders': ticker.major_holders,
+                'institutional_holders': ticker.institutional_holders
+            }
+            
+        except Exception as e:
+            print(f"Error fetching financial data for {symbol}: {e}")
+            return {}
