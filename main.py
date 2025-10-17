@@ -1,290 +1,247 @@
 #!/usr/bin/env python3
 """
-Main script to fetch options data for S&P 500 companies using async processing
+Main orchestration script for market data ETL
+Coordinates data collection, processing, and analysis
 """
 
 import asyncio
 import sys
 import os
-import pandas as pd
-from datetime import datetime
 import argparse
+from datetime import datetime
+import subprocess
 
 # Add project root to path
 sys.path.append(os.path.dirname(__file__))
 
-from src.scrapers import HybridAsyncOptionsScraper
 from src.database import OptionsDatabase
 
 
-def load_sp500_symbols(csv_path: str = "data/sp500_companies.csv") -> list:
+def run_script(script_path: str, args: list = None) -> int:
     """
-    Load S&P 500 symbols from CSV file
+    Run a script with given arguments
     
     Args:
-        csv_path: Path to S&P 500 companies CSV file
+        script_path: Path to script to run
+        args: List of arguments to pass to script
         
     Returns:
-        List of stock symbols
+        Exit code of the script
     """
+    cmd = [sys.executable, script_path]
+    if args:
+        cmd.extend(args)
+    
+    print(f" Running: {' '.join(cmd)}")
     try:
-        df = pd.read_csv(csv_path)
-        symbols = df['Symbol'].tolist()
-        print(f"Loaded {len(symbols)} S&P 500 symbols")
-        return symbols
-    except Exception as e:
-        print(f"Error loading S&P 500 symbols: {e}")
-        return []
+        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        print(result.stdout)
+        if result.stderr:
+            print(f"Warnings: {result.stderr}")
+        return 0
+    except subprocess.CalledProcessError as e:
+        print(f" Error running {script_path}: {e}")
+        print(f"stdout: {e.stdout}")
+        print(f"stderr: {e.stderr}")
+        return e.returncode
 
 
-def load_index_etfs(csv_path: str = "data/index_etfs.csv") -> list:
-    """
-    Load index ETF symbols from CSV file
-    
-    Args:
-        csv_path: Path to index ETFs CSV file
-        
-    Returns:
-        List of ETF symbols
-    """
+def show_database_stats(db_path: str = "data/options/market_data.db"):
+    """Show database statistics"""
+    print("\n DATABASE STATISTICS")
+    print("="*60)
     try:
-        df = pd.read_csv(csv_path)
-        symbols = df['Symbol'].tolist()
-        print(f"Loaded {len(symbols)} index ETF symbols: {symbols}")
-        return symbols
+        db = OptionsDatabase(db_path)
+        stats = db.get_database_stats()
+        for key, value in stats.items():
+            print(f"{key}: {value}")
     except Exception as e:
-        print(f"Error loading index ETFs: {e}")
-        return []
+        print(f"Error getting database stats: {e}")
+    print("="*60)
 
 
-async def fetch_options_data(symbols: list, 
-                           max_expiration_dates: int = 30,
-                           fetch_stock_info: bool = True,
-                           rate_limit_delay: float = 0.05,
-                           max_concurrent: int = 15,
-                           batch_size: int = 100):
-    """
-    Fetch options data for symbols using async processing
+def main():
+    """Main orchestration function"""
+    parser = argparse.ArgumentParser(description="Market Data ETL Orchestration")
     
-    Args:
-        symbols: List of symbols (stocks and/or ETFs)
-        max_expiration_dates: Maximum number of expiration dates per symbol
-        fetch_stock_info: Whether to fetch stock information
-        rate_limit_delay: Delay between requests
-        max_concurrent: Maximum concurrent requests
-        batch_size: Number of symbols to process in each batch
+    # Data collection modes
+    parser.add_argument("--collect-all", action="store_true", 
+                       help="Collect all data types (stock, options, treasury, metrics)")
+    parser.add_argument("--collect-stock", action="store_true", 
+                       help="Collect stock data (info, prices, earnings)")
+    parser.add_argument("--collect-options", action="store_true", 
+                       help="Collect options data")
+    parser.add_argument("--collect-treasury", action="store_true", 
+                       help="Collect treasury data")
+    parser.add_argument("--calculate-metrics", action="store_true", 
+                       help="Calculate options metrics")
     
-    Returns:
-        Tuple of (stock_info_results, options_data_results, timing_info)
-    """
-    print(f"\n=== Starting Options Data Fetch ===")
-    print(f"Total symbols: {len(symbols)}")
-    print(f"Max expiration dates per symbol: {max_expiration_dates}")
-    print(f"Fetch stock info: {fetch_stock_info}")
-    print(f"Rate limit delay: {rate_limit_delay}s")
-    print(f"Max concurrent requests: {max_concurrent}")
-    print(f"Batch size: {batch_size}")
+    # Data sources
+    parser.add_argument("--sp500", action="store_true", help="Include S&P 500 companies")
+    parser.add_argument("--etfs", action="store_true", help="Include index ETFs")
+    parser.add_argument("--symbols", nargs="+", help="Specific symbols to process")
+    parser.add_argument("--limit", type=int, help="Limit number of symbols (for testing)")
     
-    # Initialize scraper
-    scraper = HybridAsyncOptionsScraper(
-        rate_limit_delay=rate_limit_delay,
-        max_concurrent_requests=max_concurrent
-    )
+    # Query modes
+    parser.add_argument("--query-all", action="store_true", help="Query all data types")
+    parser.add_argument("--query-options", action="store_true", help="Query options data")
+    parser.add_argument("--query-stock", action="store_true", help="Query stock data")
+    parser.add_argument("--query-treasury", action="store_true", help="Query treasury data")
+    parser.add_argument("--query-metrics", action="store_true", help="Query options metrics")
     
-    # Initialize database
-    db = OptionsDatabase()
+    # Configuration
+    parser.add_argument("--db-path", default="data/options/market_data.db", help="Database path")
+    parser.add_argument("--rate-limit", type=float, default=0.1, help="Rate limit delay")
+    parser.add_argument("--max-concurrent", type=int, default=15, help="Max concurrent requests")
+    parser.add_argument("--batch-size", type=int, default=100, help="Batch size")
+    parser.add_argument("--max-expiration-dates", type=int, default=30, help="Max expiration dates")
     
-    start_time = datetime.now()
-    total_stock_info_inserted = 0
-    total_options_inserted = 0
-    successful_symbols = 0
+    # Treasury specific
+    parser.add_argument("--treasury-year", type=int, help="Year for treasury data")
+    parser.add_argument("--treasury-month", type=int, help="Month for treasury data")
     
-    # Process symbols in batches
-    for i in range(0, len(symbols), batch_size):
-        batch = symbols[i:i + batch_size]
-        batch_num = (i // batch_size) + 1
-        total_batches = (len(symbols) + batch_size - 1) // batch_size
-        
-        print(f"\n=== Processing Batch {batch_num}/{total_batches} ({len(batch)} symbols) ===")
-        batch_start_time = datetime.now()
-        
-        try:
-            if fetch_stock_info:
-                # Fetch stock info for the batch
-                print("Fetching stock info for batch...")
-                stock_info_results = await scraper.get_stock_info_batch(batch)
-                
-                # Store stock info
-                batch_stock_inserted = 0
-                for symbol, stock_info in stock_info_results.items():
-                    if stock_info:
-                        success = db.insert_stock_info(stock_info)
-                        if success:
-                            batch_stock_inserted += 1
-                
-                print(f"Inserted stock info for {batch_stock_inserted}/{len(batch)} symbols")
-                total_stock_info_inserted += batch_stock_inserted
-            
-            # Fetch options data for the batch
-            print("Fetching options data for batch...")
-            options_data_results = await scraper.get_options_data_batch(batch, max_expiration_dates)
-            
-            # Store options data
-            batch_options_inserted = 0
-            batch_successful_symbols = 0
-            for symbol, options_data in options_data_results.items():
-                if options_data:
-                    rows_inserted = db.insert_options_chain(options_data)
-                    batch_options_inserted += rows_inserted
-                    batch_successful_symbols += 1
-            
-            batch_end_time = datetime.now()
-            batch_duration = batch_end_time - batch_start_time
-            
-            print(f"Batch {batch_num} completed in {batch_duration}")
-            print(f"Inserted {batch_options_inserted} options contracts for {batch_successful_symbols} symbols")
-            
-            total_options_inserted += batch_options_inserted
-            successful_symbols += batch_successful_symbols
-            
-        except Exception as e:
-            print(f"Error processing batch {batch_num}: {e}")
-            continue
+    # Query filters
+    parser.add_argument("--symbol", "-s", help="Symbol to query")
+    parser.add_argument("--expiration", "-e", help="Expiration date filter")
+    parser.add_argument("--type", "-t", choices=['call', 'put'], help="Option type filter")
+    parser.add_argument("--moneyness", "-m", choices=['ITM', 'ATM', 'OTM'], help="Moneyness filter")
+    parser.add_argument("--min-volume", "-v", type=int, help="Minimum volume threshold")
+    parser.add_argument("--start-date", help="Start date filter")
+    parser.add_argument("--end-date", help="End date filter")
+    parser.add_argument("--limit-results", type=int, default=20, help="Limit query results")
     
-    end_time = datetime.now()
-    total_duration = end_time - start_time
-    
-    # Compile results
-    timing_info = {
-        'total_duration': total_duration,
-        'successful_symbols': successful_symbols,
-        'total_symbols': len(symbols),
-        'total_stock_info_inserted': total_stock_info_inserted,
-        'total_options_inserted': total_options_inserted,
-        'average_time_per_symbol': total_duration.total_seconds() / len(symbols) if symbols else 0
-    }
-    
-    return None, None, timing_info
-
-
-async def main():
-    """Main async function"""
-    parser = argparse.ArgumentParser(description="Fetch options data for stocks and ETFs using async processing")
-    parser.add_argument("--max-expiration-dates", "-e", type=int, default=30,
-                       help="Maximum number of expiration dates per symbol")
-    parser.add_argument("--db-path", default="data/options/market_data.db",
-                       help="Path to SQLite database file")
-    parser.add_argument("--rate-limit", "-r", type=float, default=0.05,
-                       help="Rate limit delay between requests (seconds)")
-    parser.add_argument("--max-concurrent", "-c", type=int, default=15,
-                       help="Maximum concurrent requests")
-    parser.add_argument("--batch-size", "-b", type=int, default=100,
-                       help="Batch size for processing symbols")
-    parser.add_argument("--skip-stock-info", action="store_true",
-                       help="Skip fetching stock information")
-    parser.add_argument("--symbols", "-s", nargs="+",
-                       help="Specific symbols to fetch (instead of all S&P 500)")
-    parser.add_argument("--limit", "-l", type=int,
-                       help="Limit number of symbols to process (for testing)")
-    parser.add_argument("--include-etfs", action="store_true",
-                       help="Include index ETFs (SPY, QQQ, IWM, DIA)")
-    parser.add_argument("--etfs-only", action="store_true",
-                       help="Process only index ETFs")
-    parser.add_argument("--stats", action="store_true",
-                       help="Show database statistics before and after")
+    # Output
+    parser.add_argument("--output", "-o", help="Output file prefix")
+    parser.add_argument("--stats", action="store_true", help="Show database statistics")
     
     args = parser.parse_args()
     
-    # Initialize database
-    db = OptionsDatabase(args.db_path)
-    
-    # Show statistics if requested
+    # Show database statistics if requested
     if args.stats:
-        print("\n=== Database Statistics (Before) ===")
-        stats = db.get_database_stats()
-        for key, value in stats.items():
-            print(f"{key}: {value}")
+        show_database_stats(args.db_path)
+        if not any([args.collect_all, args.collect_stock, args.collect_options, 
+                   args.collect_treasury, args.calculate_metrics, args.query_all,
+                   args.query_options, args.query_stock, args.query_treasury, args.query_metrics]):
+            return 0
     
-    # Determine symbols to process
-    if args.etfs_only:
-        # Process only index ETFs
-        symbols_to_process = load_index_etfs()
-        if not symbols_to_process:
-            print("Error: Could not load index ETFs")
-            return 1
-        print(f"Processing only index ETFs: {symbols_to_process}")
-    elif args.symbols:
-        # Process specific symbols
-        symbols_to_process = [s.upper() for s in args.symbols]
-        print(f"Processing specific symbols: {symbols_to_process}")
-    else:
-        # Load S&P 500 symbols
-        symbols_to_process = load_sp500_symbols()
-        if not symbols_to_process:
-            print("Error: Could not load S&P 500 symbols")
-            return 1
-        
-        # Add index ETFs if requested
-        if args.include_etfs:
-            etf_symbols = load_index_etfs()
-            if etf_symbols:
-                symbols_to_process.extend(etf_symbols)
-                print(f"Added {len(etf_symbols)} index ETFs to S&P 500 symbols")
-        
-        # Apply limit if specified
-        if args.limit:
-            symbols_to_process = symbols_to_process[:args.limit]
-            print(f"Limited to first {args.limit} symbols")
+    # Determine what to do
+    collect_data = any([args.collect_all, args.collect_stock, args.collect_options, 
+                       args.collect_treasury, args.calculate_metrics])
+    query_data = any([args.query_all, args.query_options, args.query_stock, 
+                     args.query_treasury, args.query_metrics])
     
-    if not symbols_to_process:
-        print("No symbols to process")
+    if not collect_data and not query_data:
+        print(" No action specified. Use --collect-* or --query-* options")
+        parser.print_help()
         return 1
     
-    try:
-        # Fetch options data
-        _, _, timing_info = await fetch_options_data(
-            symbols_to_process,
-            max_expiration_dates=args.max_expiration_dates,
-            fetch_stock_info=not args.skip_stock_info,
-            rate_limit_delay=args.rate_limit,
-            max_concurrent=args.max_concurrent,
-            batch_size=args.batch_size
-        )
-        
-        # Print results
-        print(f"\n=== Fetch Complete ===")
-        print(f"Successfully processed: {timing_info['successful_symbols']}/{timing_info['total_symbols']} symbols")
-        print(f"Stock info inserted: {timing_info['total_stock_info_inserted']}")
-        print(f"Options contracts inserted: {timing_info['total_options_inserted']}")
-        print(f"Total time: {timing_info['total_duration']}")
-        print(f"Average time per symbol: {timing_info['average_time_per_symbol']:.2f} seconds")
-        
-        # Calculate performance metrics
-        if timing_info['successful_symbols'] > 0:
-            contracts_per_second = timing_info['total_options_inserted'] / timing_info['total_duration'].total_seconds()
-            print(f"Options contracts per second: {contracts_per_second:.1f}")
-            
-            symbols_per_minute = (timing_info['successful_symbols'] / timing_info['total_duration'].total_seconds()) * 60
-            print(f"Symbols processed per minute: {symbols_per_minute:.1f}")
-        
-    except KeyboardInterrupt:
-        print(f"\nInterrupted by user")
-        return 1
-    except Exception as e:
-        print(f"Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
+    # Build common arguments
+    common_args = [
+        "--db-path", args.db_path,
+        "--rate-limit", str(args.rate_limit),
+        "--max-concurrent", str(args.max_concurrent),
+        "--batch-size", str(args.batch_size)
+    ]
     
-    # Show final statistics if requested
-    if args.stats:
-        print(f"\n=== Database Statistics (After) ===")
-        stats = db.get_database_stats()
-        for key, value in stats.items():
-            print(f"{key}: {value}")
+    if args.symbols:
+        common_args.extend(["--symbols"] + args.symbols)
+    elif args.sp500:
+        common_args.append("--sp500")
+    elif args.etfs:
+        common_args.append("--etfs")
     
+    if args.limit:
+        common_args.extend(["--limit", str(args.limit)])
+    
+    if args.output:
+        common_args.extend(["--output", args.output])
+    
+    # Data Collection
+    if collect_data:
+        print(" Starting data collection...")
+        
+        # Build collect_data.py arguments
+        collect_args = ["scripts/collect_data.py"] + common_args
+        
+        if args.collect_all:
+            collect_args.append("--all-data")
+        else:
+            if args.collect_stock:
+                collect_args.append("--stock-data")
+            if args.collect_options:
+                collect_args.append("--options-data")
+            if args.collect_treasury:
+                collect_args.append("--treasury-data")
+            if args.calculate_metrics:
+                collect_args.append("--metrics")
+        
+        if args.treasury_year:
+            collect_args.extend(["--treasury-year", str(args.treasury_year)])
+        if args.treasury_month:
+            collect_args.extend(["--treasury-month", str(args.treasury_month)])
+        
+        collect_args.extend(["--max-expiration-dates", str(args.max_expiration_dates)])
+        
+        # Run data collection
+        exit_code = run_script("scripts/collect_data.py", collect_args[1:])  # Skip script name
+        if exit_code != 0:
+            print(f" Data collection failed with exit code {exit_code}")
+            return exit_code
+        
+        print(" Data collection completed successfully!")
+    
+    # Data Querying
+    if query_data:
+        print("\n Starting data querying...")
+        
+        # Build query_data.py arguments
+        query_args = ["scripts/query_data.py"] + common_args
+        
+        if args.query_all:
+            query_args.append("--all")
+        else:
+            if args.query_options:
+                query_args.append("--options")
+            if args.query_stock:
+                query_args.append("--stock-prices")
+            if args.query_treasury:
+                query_args.append("--treasury")
+            if args.query_metrics:
+                query_args.append("--metrics")
+        
+        # Add query filters
+        if args.symbol:
+            query_args.extend(["--symbol", args.symbol])
+        if args.expiration:
+            query_args.extend(["--expiration", args.expiration])
+        if args.type:
+            query_args.extend(["--type", args.type])
+        if args.moneyness:
+            query_args.extend(["--moneyness", args.moneyness])
+        if args.min_volume:
+            query_args.extend(["--min-volume", str(args.min_volume)])
+        if args.start_date:
+            query_args.extend(["--start-date", args.start_date])
+        if args.end_date:
+            query_args.extend(["--end-date", args.end_date])
+        if args.limit_results:
+            query_args.extend(["--limit", str(args.limit_results)])
+        
+        # Run data querying
+        exit_code = run_script("scripts/query_data.py", query_args[1:])  # Skip script name
+        if exit_code != 0:
+            print(f" Data querying failed with exit code {exit_code}")
+            return exit_code
+        
+        print(" Data querying completed successfully!")
+    
+    # Show final statistics
+    if args.stats or collect_data:
+        show_database_stats(args.db_path)
+    
+    print(f"\n Market Data ETL orchestration completed successfully!")
     return 0
 
 
 if __name__ == "__main__":
-    exit(asyncio.run(main()))
+    exit(main())

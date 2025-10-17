@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 
 from ..database.models import StockInfo, StockPrices
+from ..metrics.stocks import calculate_price_metrics, calculate_technical_indicators
 
 
 class StockProcessor:
@@ -62,58 +63,16 @@ class StockProcessor:
         Returns:
             Dictionary with price metrics
         """
-        if not stock_prices:
-            return {}
-        
-        # Convert to DataFrame for easier analysis
-        df = pd.DataFrame([{
-            'date': price.date,
-            'open': price.open_price,
-            'high': price.high_price,
-            'low': price.low_price,
-            'close': price.close_price,
-            'volume': price.volume
-        } for price in stock_prices])
-        
-        if df.empty:
-            return {}
-        
-        # Calculate metrics
-        latest_price = df['close'].iloc[-1]
-        first_price = df['close'].iloc[0]
-        
-        metrics = {
-            'current_price': latest_price,
-            'price_change': latest_price - first_price,
-            'price_change_pct': ((latest_price - first_price) / first_price) * 100 if first_price != 0 else 0,
-            'high_52w': df['high'].max(),
-            'low_52w': df['low'].min(),
-            'avg_volume': df['volume'].mean(),
-            'volatility': self._calculate_volatility(df['close']),
-            'trend': self._determine_trend(df['close'])
-        }
-        
-        return metrics
+        return calculate_price_metrics(stock_prices)
     
-    def _calculate_volatility(self, prices: pd.Series) -> float:
-        """Calculate price volatility"""
-        if len(prices) < 2:
-            return 0.0
+    def calculate_technical_indicators(self, stock_prices: List[StockPrices]) -> Dict[str, Any]:
+        """
+        Calculate technical indicators from stock price data
         
-        returns = prices.pct_change().dropna()
-        return returns.std() * (252 ** 0.5)  # Annualized volatility
-    
-    def _determine_trend(self, prices: pd.Series) -> str:
-        """Determine price trend"""
-        if len(prices) < 2:
-            return 'Unknown'
-        
-        first_price = prices.iloc[0]
-        last_price = prices.iloc[-1]
-        
-        if last_price > first_price * 1.05:  # 5% threshold
-            return 'Uptrend'
-        elif last_price < first_price * 0.95:  # 5% threshold
-            return 'Downtrend'
-        else:
-            return 'Sideways'
+        Args:
+            stock_prices: List of StockPrices objects
+            
+        Returns:
+            Dictionary with technical indicators
+        """
+        return calculate_technical_indicators(stock_prices)

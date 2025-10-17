@@ -48,7 +48,7 @@ def update_treasury_data(year: int = None, month: int = None, db_path: str = "da
         # Insert into database (will overwrite overlapping days due to UNIQUE constraint)
         rows_inserted = db.insert_treasury_rates(treasury_rates)
         
-        print(f"✅ Successfully inserted {rows_inserted} treasury rate records")
+        print(f" Successfully inserted {rows_inserted} treasury rate records")
         
         # Show summary
         latest_rates = db.get_latest_treasury_rates()
@@ -59,7 +59,7 @@ def update_treasury_data(year: int = None, month: int = None, db_path: str = "da
         return rows_inserted
         
     except Exception as e:
-        print(f"❌ Error updating treasury data: {e}")
+        print(f" Error updating treasury data: {e}")
         return 0
 
 
@@ -100,14 +100,14 @@ def update_multiple_months(start_year: int, start_month: int,
                 current_year += 1
                 
         except Exception as e:
-            print(f"❌ Error updating {current_year}-{current_month:02d}: {e}")
+            print(f" Error updating {current_year}-{current_month:02d}: {e}")
             # Continue with next month
             current_month += 1
             if current_month > 12:
                 current_month = 1
                 current_year += 1
     
-    print(f"✅ Total treasury records inserted: {total_inserted}")
+    print(f" Total treasury records inserted: {total_inserted}")
     return total_inserted
 
 
@@ -140,14 +140,14 @@ def main():
             rows_inserted = update_treasury_data(args.year, args.month, args.db_path)
         
         if rows_inserted > 0:
-            print(f"✅ Treasury data update completed successfully!")
+            print(f" Treasury data update completed successfully!")
             return 0
         else:
-            print("⚠️ No treasury data was inserted")
+            print(" No treasury data was inserted")
             return 1
             
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f" Error: {e}")
         return 1
 
 

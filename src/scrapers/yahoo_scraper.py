@@ -276,11 +276,11 @@ class YahooScraper:
             
             stock_prices = []
             for date, row in hist.iterrows():
-                # Convert pandas Timestamp to datetime
-                if hasattr(date, 'to_pydatetime'):
-                    date_obj = date.to_pydatetime()
+                # Convert pandas Timestamp to date
+                if hasattr(date, 'date'):
+                    date_obj = date.date()
                 else:
-                    date_obj = datetime.combine(date.date(), datetime.min.time())
+                    date_obj = date.date()
                 
                 stock_price = StockPrices(
                     symbol=symbol.upper(),

@@ -139,11 +139,11 @@ def main():
             deleted_count = cleanup_old_data(args.db_path, args.days_old)
             print(f"Deleted {deleted_count} old records")
         
-        print("\n✅ Database health check completed successfully!")
+        print("\n Database health check completed successfully!")
         return 0
         
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f" Error: {e}")
         return 1
 
 

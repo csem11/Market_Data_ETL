@@ -2,7 +2,7 @@
 Data models for options chain data
 """
 
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -55,7 +55,7 @@ class StockInfo:
 class StockPrices:
     """Data class for stock price history"""
     symbol: str
-    date: datetime
+    date: date
     open_price: Optional[float] = None
     high_price: Optional[float] = None
     low_price: Optional[float] = None
