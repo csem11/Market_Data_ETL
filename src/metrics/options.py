@@ -170,3 +170,37 @@ def calculate_advanced_metrics(options_df: pd.DataFrame, current_price: float) -
         }
     
     return metrics
+
+
+class OptionsMetricsCalculator:
+    """Calculator class for options metrics"""
+    
+    def __init__(self):
+        """Initialize the calculator"""
+        pass
+    
+    def calculate_all_metrics(self, options_df: pd.DataFrame, current_price: float = None) -> List[OptionMetrics]:
+        """
+        Calculate all option metrics for a given options DataFrame
+        
+        Args:
+            options_df: DataFrame with options chain data
+            current_price: Current stock price
+            
+        Returns:
+            List of OptionMetrics objects
+        """
+        return calculate_option_metrics(options_df, current_price)
+    
+    def calculate_advanced_metrics_for_symbol(self, options_df: pd.DataFrame, current_price: float) -> Dict[str, Any]:
+        """
+        Calculate advanced metrics for a symbol
+        
+        Args:
+            options_df: DataFrame with options chain data
+            current_price: Current stock price
+            
+        Returns:
+            Dictionary with advanced metrics
+        """
+        return calculate_advanced_metrics(options_df, current_price)

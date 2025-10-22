@@ -45,7 +45,11 @@ class TreasuryScraper:
             month = now.month
 
         # Construct the year-month string for 'field_tdr_date_value' param: format 'YYYYMM'
-        ym_str = f"{year}{month:02d}"
+        if year and month:
+            ym_str = f"{year}{month:02d}"
+        else:
+            now = datetime.now()
+            ym_str = f"{now.year}{now.month:02d}"
 
         # This is the CSV download URL pattern found on the treasury website for the table:
         csv_url = f"{self.base_url}/all/{ym_str}?type=daily_treasury_bill_rates&field_tdr_date_value_month={ym_str}&page&_format=csv"
@@ -68,7 +72,10 @@ class TreasuryScraper:
             return df
             
         except requests.RequestException as e:
-            print(f"Error fetching treasury data for {year}-{month:02d}: {e}")
+            if year and month:
+                print(f"Error fetching treasury data for {year}-{month:02d}: {e}")
+            else:
+                print(f"Error fetching treasury data for current month: {e}")
             return pd.DataFrame()
     
     def _clean_treasury_data(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -160,19 +167,28 @@ class TreasuryScraper:
         Returns:
             List of TreasuryRates objects
         """
-        print(f"Fetching treasury data for {year}-{month:02d}...")
+        if year and month:
+            print(f"Fetching treasury data for {year}-{month:02d}...")
+        else:
+            print("Fetching treasury data for current month...")
         
         # Fetch raw data
         df = self.get_daily_treasury_rates(year, month)
         
         if df.empty:
-            print(f"No data found for {year}-{month:02d}")
+            if year and month:
+                print(f"No data found for {year}-{month:02d}")
+            else:
+                print("No data found for current month")
             return []
         
         # Process into TreasuryRates objects
         treasury_rates = self.process_treasury_data(df)
         
-        print(f"Processed {len(treasury_rates)} treasury rate records for {year}-{month:02d}")
+        if year and month:
+            print(f"Processed {len(treasury_rates)} treasury rate records for {year}-{month:02d}")
+        else:
+            print(f"Processed {len(treasury_rates)} treasury rate records for current month")
         return treasury_rates
 
 

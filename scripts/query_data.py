@@ -37,11 +37,18 @@ def query_options_data(db: OptionsDatabase, symbol: str = None,
     if min_volume:
         return db.get_high_volume_options(min_volume=min_volume, limit=limit)
     else:
-        return db.get_options_chain(
-            symbol=symbol,
-            expiration_date=expiration_date,
-            option_type=option_type
-        )
+        # Get basic options data
+        df = db.get_options_chain(symbol=symbol, expiration_date=expiration_date)
+        
+        # Apply additional filters if needed
+        if option_type:
+            df = df[df['option_type'] == option_type]
+        
+        # Apply limit
+        if limit:
+            df = df.head(limit)
+        
+        return df
 
 
 def query_stock_data(db: OptionsDatabase, symbol: str = None, 
@@ -60,12 +67,17 @@ def query_stock_data(db: OptionsDatabase, symbol: str = None,
     Returns:
         DataFrame with stock price data
     """
-    return db.get_stock_prices(
+    df = db.get_stock_prices(
         symbol=symbol,
         start_date=start_date,
-        end_date=end_date,
-        limit=limit
+        end_date=end_date
     )
+    
+    # Apply limit if specified
+    if limit and len(df) > limit:
+        df = df.head(limit)
+    
+    return df
 
 
 def query_earnings_data(db: OptionsDatabase, symbol: str = None,
@@ -137,13 +149,19 @@ def query_options_metrics(db: OptionsDatabase, symbol: str = None,
     elif moneyness:
         return db.get_options_by_moneyness(symbol=symbol, moneyness=moneyness)
     else:
-        return db.get_option_metrics(
+        # Get metrics data
+        df = db.get_option_metrics(
             symbol=symbol,
             expiration_date=expiration_date,
             option_type=option_type,
-            moneyness=moneyness,
-            limit=limit
+            moneyness=moneyness
         )
+        
+        # Apply limit
+        if limit:
+            df = df.head(limit)
+        
+        return df
 
 
 def query_stock_info(db: OptionsDatabase, symbol: str = None,
@@ -160,11 +178,23 @@ def query_stock_info(db: OptionsDatabase, symbol: str = None,
     Returns:
         DataFrame with stock info
     """
-    return db.get_stock_info(
-        symbol=symbol,
-        sector=sector,
-        limit=limit
-    )
+    if symbol:
+        # Get specific symbol info
+        stock_info = db.get_stock_info(symbol)
+        if stock_info:
+            df = pd.DataFrame([stock_info])
+        else:
+            df = pd.DataFrame()
+    else:
+        # Get all stock info (this would need to be implemented in the database)
+        # For now, return empty DataFrame
+        df = pd.DataFrame()
+    
+    # Apply limit if specified
+    if limit and len(df) > limit:
+        df = df.head(limit)
+    
+    return df
 
 
 def print_dataframe_summary(df: pd.DataFrame, data_type: str):
@@ -241,11 +271,11 @@ def main():
     query_earnings = args.earnings or args.all
     query_treasury = args.treasury or args.all
     query_metrics = args.metrics or args.all
-    query_stock_info = args.stock_info or args.all
+    query_stock_info_flag = args.stock_info or args.all
     
     # If no specific data type specified, show help
     if not any([query_options, query_stock_prices, query_earnings, 
-                query_treasury, query_metrics, query_stock_info]):
+                query_treasury, query_metrics, query_stock_info_flag]):
         print(" No data type specified. Use --options, --stock-prices, --earnings, --treasury, --metrics, --stock-info, or --all")
         parser.print_help()
         return 1
@@ -317,7 +347,7 @@ def main():
                 print(f" Saved to {args.output}_metrics.csv")
         
         # Query stock info
-        if query_stock_info:
+        if query_stock_info_flag:
             print("\n Querying stock info...")
             df = query_stock_info(
                 db, symbol=args.symbol, sector=args.sector, limit=args.limit

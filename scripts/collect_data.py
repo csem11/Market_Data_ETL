@@ -1,441 +1,437 @@
 #!/usr/bin/env python3
 """
-General data collection script for market data ETL
-Handles options, stock prices, earnings, treasury data, and metrics calculation
+Data collection script for market data ETL
+Handles collection of stock, options, treasury, and indices data
 """
 
 import sys
 import os
 import argparse
-import pandas as pd
-from datetime import datetime, timedelta, date
-from typing import List, Dict, Any, Optional
 import asyncio
+from datetime import datetime, timedelta
+from typing import List, Dict, Any, Optional
 
 # Add project root to path
 sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 
-from src.database import OptionsDatabase, StockInfo, StockPrices, EarningsDates, OptionMetrics, TreasuryRates
+from src.database import OptionsDatabase
 from src.scrapers.yahoo_scraper import YahooScraper
-from src.scrapers import HybridAsyncOptionsScraper
 from src.scrapers.treasury import TreasuryScraper
-from src.processors.options_processor import OptionsProcessor
 from src.processors.stock_processor import StockProcessor
+from src.processors.options_processor import OptionsProcessor
+from src.processors.treasury_processor import TreasuryProcessor
+from src.metrics.options import OptionsMetricsCalculator
 
 
-def load_symbols_from_csv(csv_path: str) -> List[str]:
-    """Load symbols from CSV file"""
+def load_indices_symbols(csv_path: str = "data/indicies.csv") -> List[str]:
+    """
+    Load indices symbols from CSV file
+    
+    Args:
+        csv_path: Path to indices CSV file
+        
+    Returns:
+        List of indices symbols
+    """
+    import pandas as pd
+    
     try:
         df = pd.read_csv(csv_path)
-        if 'Symbol' in df.columns:
-            return df['Symbol'].tolist()
-        else:
-            print(f"Warning: No 'Symbol' column found in {csv_path}")
-            return []
+        # Filter out empty rows and get ticker column
+        symbols = df['ticker'].dropna().tolist()
+        print(f"Loaded {len(symbols)} indices symbols from {csv_path}")
+        return symbols
     except Exception as e:
-        print(f"Error loading {csv_path}: {e}")
+        print(f"Error loading indices symbols: {e}")
         return []
 
 
-def get_monday_date() -> datetime:
-    """Get the date of the most recent Monday"""
-    today = datetime.now()
-    days_since_monday = today.weekday()  # Monday is 0
-    monday = today - timedelta(days=days_since_monday)
-    return monday.replace(hour=0, minute=0, second=0, microsecond=0)
-
-
-def collect_stock_data(db: OptionsDatabase, scraper: YahooScraper, symbols: List[str], 
-                       monday_date: datetime, rate_limit_delay: float = 0.1) -> Dict[str, Any]:
+def collect_stock_data(symbols: List[str], db: OptionsDatabase, 
+                      rate_limit: float = 0.1, max_concurrent: int = 15, 
+                      price_period: str = "ytd") -> Dict[str, int]:
     """
-    Collect comprehensive stock data (info, prices, earnings) for symbols
+    Collect stock data (info and prices) for given symbols
     
     Args:
+        symbols: List of stock symbols
         db: Database instance
-        scraper: Yahoo scraper instance
-        symbols: List of symbols to process
-        monday_date: Monday date for returns calculation
-        rate_limit_delay: Delay between API calls
+        rate_limit: Rate limit delay
+        max_concurrent: Max concurrent requests
+        price_period: Period for price data collection (ytd, 1y, etc.)
         
     Returns:
-        Dictionary with collection results
+        Dictionary with collection statistics
     """
-    print(f"Collecting stock data for {len(symbols)} symbols...")
+    print(f"\n Collecting stock data for {len(symbols)} symbols...")
     
-    results = {
-        'total_symbols': len(symbols),
-        'processed_symbols': 0,
-        'stock_info_inserted': 0,
-        'stock_prices_inserted': 0,
-        'earnings_dates_inserted': 0,
-        'returns_summary': [],
-        'errors': []
+    scraper = YahooScraper(rate_limit_delay=rate_limit)
+    processor = StockProcessor()
+    
+    stats = {
+        'stock_info_collected': 0,
+        'stock_prices_collected': 0,
+        'errors': 0
     }
     
-    for i, symbol in enumerate(symbols):
-        print(f"\n[{i+1}/{len(symbols)}] Processing {symbol}...")
+    for i, symbol in enumerate(symbols, 1):
+        print(f"Processing {symbol} ({i}/{len(symbols)})")
         
         try:
-            # Get stock info
+            # Collect stock info
             stock_info = scraper.get_stock_info(symbol)
             if stock_info:
-                db.insert_stock_info(stock_info)
-                results['stock_info_inserted'] += 1
+                processed_info = processor.process_stock_info(stock_info)
+                if db.insert_stock_info(processed_info):
+                    stats['stock_info_collected'] += 1
+                    print(f"  ✓ Stock info collected for {symbol}")
+                else:
+                    print(f"  ✗ Failed to insert stock info for {symbol}")
             
-            # Get stock price history (last 30 days to ensure we have Monday data)
-            stock_prices = scraper.get_stock_price_history(symbol, period="1mo", interval="1d")
+            # Collect stock prices (configurable period daily data)
+            if price_period == "ytd":
+                stock_prices = scraper.get_stock_price_history_ytd(symbol, interval="1d")
+            else:
+                stock_prices = scraper.get_stock_price_history(symbol, period=price_period, interval="1d")
             if stock_prices:
-                inserted = db.insert_stock_prices(stock_prices)
-                results['stock_prices_inserted'] += inserted
-                
-                # Calculate returns since Monday
-                monday_date_only = monday_date.date()
-                monday_prices = [p for p in stock_prices if p.date == monday_date_only]
-                latest_prices = [p for p in stock_prices if p.date >= monday_date_only]
-                
-                if monday_prices and latest_prices:
-                    monday_close = monday_prices[0].close_price
-                    latest_close = latest_prices[-1].close_price
-                    if monday_close and latest_close and monday_close != 0:
-                        returns = ((latest_close - monday_close) / monday_close) * 100
-                        results['returns_summary'].append({
-                            'symbol': symbol,
-                            'returns': returns
-                        })
-                        print(f"    Returns since Monday: {returns:.2f}%")
-            
-            # Get earnings dates
-            earnings_dates = scraper.get_earnings_dates(symbol)
-            if earnings_dates:
-                inserted = db.insert_earnings_dates(earnings_dates)
-                results['earnings_dates_inserted'] += inserted
-                print(f"    Retrieved {len(earnings_dates)} earnings dates")
-            
-            results['processed_symbols'] += 1
+                processed_prices = processor.process_stock_prices(stock_prices)
+                rows_inserted = db.insert_stock_prices(processed_prices)
+                if rows_inserted > 0:
+                    stats['stock_prices_collected'] += rows_inserted
+                    print(f"  ✓ Stock prices collected for {symbol} ({rows_inserted} records)")
+                else:
+                    print(f"  ✗ Failed to insert stock prices for {symbol}")
             
         except Exception as e:
-            error_msg = f"{symbol}: {str(e)}"
-            results['errors'].append(error_msg)
-            print(f"     Error: {error_msg}")
+            print(f"  ✗ Error processing {symbol}: {e}")
+            stats['errors'] += 1
+            continue
     
-    return results
+    return stats
 
 
-async def collect_options_data(db: OptionsDatabase, symbols: List[str], 
-                              max_expiration_dates: int = 30,
-                              rate_limit_delay: float = 0.05,
-                              max_concurrent: int = 15,
-                              batch_size: int = 100) -> Dict[str, Any]:
+def collect_options_data(symbols: List[str], db: OptionsDatabase,
+                        rate_limit: float = 0.1, max_expiration_dates: int = 3) -> Dict[str, int]:
     """
-    Collect options data for symbols using async processing
+    Collect options data for given symbols
     
     Args:
+        symbols: List of stock symbols
         db: Database instance
-        symbols: List of symbols to process
-        max_expiration_dates: Maximum expiration dates per symbol
-        rate_limit_delay: Delay between requests
-        max_concurrent: Maximum concurrent requests
-        batch_size: Batch size for processing
+        rate_limit: Rate limit delay
+        max_expiration_dates: Max expiration dates per symbol
         
     Returns:
-        Dictionary with collection results
+        Dictionary with collection statistics
     """
-    print(f" Collecting options data for {len(symbols)} symbols...")
+    print(f"\n Collecting options data for {len(symbols)} symbols...")
     
-    scraper = HybridAsyncOptionsScraper(
-        rate_limit_delay=rate_limit_delay,
-        max_concurrent_requests=max_concurrent
-    )
+    scraper = YahooScraper(rate_limit_delay=rate_limit)
+    processor = OptionsProcessor()
     
-    results = {
-        'total_symbols': len(symbols),
-        'processed_symbols': 0,
-        'options_inserted': 0,
-        'errors': []
+    stats = {
+        'options_collected': 0,
+        'symbols_processed': 0,
+        'errors': 0
     }
     
-    # Process symbols in batches
-    for i in range(0, len(symbols), batch_size):
-        batch = symbols[i:i + batch_size]
-        batch_num = (i // batch_size) + 1
-        total_batches = (len(symbols) + batch_size - 1) // batch_size
-        
-        print(f"\n=== Processing Options Batch {batch_num}/{total_batches} ({len(batch)} symbols) ===")
+    for i, symbol in enumerate(symbols, 1):
+        print(f"Processing options for {symbol} ({i}/{len(symbols)})")
         
         try:
-            # Fetch options data for the batch
-            options_data_results = await scraper.get_options_data_batch(batch, max_expiration_dates)
+            # Get options data for multiple expiration dates
+            options_data = scraper.get_multiple_expiration_dates(symbol, max_expiration_dates)
             
-            # Store options data
-            batch_options_inserted = 0
-            batch_successful_symbols = 0
-            for symbol, options_data in options_data_results.items():
-                if options_data:
-                    rows_inserted = db.insert_options_chain(options_data)
-                    batch_options_inserted += rows_inserted
-                    batch_successful_symbols += 1
-            
-            print(f"    Inserted {batch_options_inserted} options contracts for {batch_successful_symbols} symbols")
-            
-            results['options_inserted'] += batch_options_inserted
-            results['processed_symbols'] += batch_successful_symbols
-            
+            if options_data:
+                processed_options = processor.process_options_chain(options_data)
+                rows_inserted = db.insert_options_chain(processed_options)
+                
+                if rows_inserted > 0:
+                    stats['options_collected'] += rows_inserted
+                    stats['symbols_processed'] += 1
+                    print(f"  ✓ Options collected for {symbol} ({rows_inserted} contracts)")
+                else:
+                    print(f"  ✗ Failed to insert options for {symbol}")
+            else:
+                print(f"  - No options data available for {symbol}")
+                
         except Exception as e:
-            error_msg = f"Batch {batch_num}: {str(e)}"
-            results['errors'].append(error_msg)
-            print(f"     Error: {error_msg}")
+            print(f"  ✗ Error processing options for {symbol}: {e}")
+            stats['errors'] += 1
+            continue
     
-    return results
+    return stats
 
 
-def collect_treasury_data(db: OptionsDatabase, year: int = None, month: int = None) -> Dict[str, Any]:
+def collect_treasury_data(db: OptionsDatabase, year: Optional[int] = None, 
+                         month: Optional[int] = None) -> Dict[str, int]:
     """
     Collect treasury rates data
     
     Args:
         db: Database instance
-        year: Year to fetch (defaults to current)
-        month: Month to fetch (defaults to current)
+        year: Specific year for treasury data
+        month: Specific month for treasury data
         
     Returns:
-        Dictionary with collection results
+        Dictionary with collection statistics
     """
-    print(f" Collecting treasury data for {year or 'current'}-{month or 'current':02d}...")
+    print(f"\n Collecting treasury data...")
     
     scraper = TreasuryScraper()
-    treasury_rates_list = scraper.fetch_and_process_month(year, month)
+    processor = TreasuryProcessor()
     
-    results = {
-        'treasury_rates_inserted': 0,
-        'errors': []
+    stats = {
+        'treasury_records_collected': 0,
+        'errors': 0
     }
     
-    if treasury_rates_list:
-        try:
-            inserted_count = db.insert_treasury_rates(treasury_rates_list)
-            results['treasury_rates_inserted'] = inserted_count
-            print(f"     Inserted {inserted_count} treasury rate records")
-        except Exception as e:
-            error_msg = f"Treasury data: {str(e)}"
-            results['errors'].append(error_msg)
-            print(f"     Error: {error_msg}")
-    else:
-        print("     No treasury data found")
+    try:
+        # Get treasury data
+        treasury_data = scraper.get_treasury_rates(year=year, month=month)
+        
+        if treasury_data:
+            processed_data = processor.process_treasury_rates(treasury_data)
+            rows_inserted = db.insert_treasury_rates(processed_data)
+            
+            if rows_inserted > 0:
+                stats['treasury_records_collected'] = rows_inserted
+                print(f"  ✓ Treasury data collected ({rows_inserted} records)")
+            else:
+                print(f"  ✗ Failed to insert treasury data")
+        else:
+            print(f"  - No treasury data available")
+            
+    except Exception as e:
+        print(f"  ✗ Error collecting treasury data: {e}")
+        stats['errors'] += 1
     
-    return results
+    return stats
 
 
-def calculate_options_metrics(db: OptionsDatabase, symbols: List[str] = None) -> Dict[str, Any]:
+def calculate_options_metrics(db: OptionsDatabase) -> Dict[str, int]:
     """
-    Calculate and store options metrics for symbols
+    Calculate options metrics for all symbols
     
     Args:
         db: Database instance
-        symbols: List of symbols to process (if None, processes all symbols with options data)
         
     Returns:
-        Dictionary with calculation results
+        Dictionary with calculation statistics
     """
-    print(f" Calculating options metrics...")
+    print(f"\n Calculating options metrics...")
     
-    processor = OptionsProcessor()
+    calculator = OptionsMetricsCalculator()
     
-    # Get symbols to process
-    if symbols is None:
-        try:
-            symbols_df = db.get_unique_options_symbols()
-            symbols = symbols_df['symbol'].tolist()
-        except Exception as e:
-            print(f"Error getting symbols: {e}")
-            return {'metrics_inserted': 0, 'errors': [str(e)]}
-    
-    results = {
-        'total_symbols': len(symbols),
-        'processed_symbols': 0,
-        'metrics_inserted': 0,
-        'errors': []
+    stats = {
+        'metrics_calculated': 0,
+        'symbols_processed': 0,
+        'errors': 0
     }
     
-    for i, symbol in enumerate(symbols):
-        print(f"  [{i+1}/{len(symbols)}] Processing {symbol}...")
+    try:
+        # Get all symbols with options data
+        symbols = db.get_available_symbols()
         
-        try:
-            # Get options data for the symbol
-            options_df = db.get_options_chain(symbol=symbol)
-            
-            if options_df.empty:
-                print(f"    No options data found for {symbol}")
-                continue
-            
-            # Get current stock price
-            current_price = None
+        for symbol in symbols:
             try:
-                stock_prices_df = db.get_stock_prices(symbol=symbol)
-                if not stock_prices_df.empty:
-                    current_price = stock_prices_df.iloc[-1]['close_price']
+                print(f"Calculating metrics for {symbol}...")
+                
+                # Get options data for this symbol
+                options_df = db.get_options_chain(symbol)
+                
+                if not options_df.empty:
+                    # Calculate metrics
+                    metrics = calculator.calculate_all_metrics(options_df)
+                    
+                    if metrics:
+                        rows_inserted = db.insert_option_metrics(metrics)
+                        if rows_inserted > 0:
+                            stats['metrics_calculated'] += rows_inserted
+                            stats['symbols_processed'] += 1
+                            print(f"  ✓ Metrics calculated for {symbol} ({rows_inserted} records)")
+                        else:
+                            print(f"  ✗ Failed to insert metrics for {symbol}")
+                    else:
+                        print(f"  - No metrics calculated for {symbol}")
+                else:
+                    print(f"  - No options data found for {symbol}")
+                    
             except Exception as e:
-                print(f"     Could not get current price: {e}")
-            
-            # Calculate metrics
-            metrics_list = processor.calculate_option_metrics(options_df, current_price)
-            
-            if metrics_list:
-                inserted_count = db.insert_option_metrics(metrics_list)
-                results['metrics_inserted'] += inserted_count
-                print(f"     Created {inserted_count} metrics records")
-            else:
-                print(f"     No metrics calculated")
-            
-            results['processed_symbols'] += 1
-            
-        except Exception as e:
-            error_msg = f"{symbol}: {str(e)}"
-            results['errors'].append(error_msg)
-            print(f"     Error: {error_msg}")
+                print(f"  ✗ Error calculating metrics for {symbol}: {e}")
+                stats['errors'] += 1
+                continue
     
-    return results
+    except Exception as e:
+        print(f"  ✗ Error in metrics calculation: {e}")
+        stats['errors'] += 1
+    
+    return stats
 
 
-def print_summary(results: Dict[str, Any], data_type: str):
-    """Print summary of data collection results"""
-    print(f"\n{'='*60}")
-    print(f" {data_type.upper()} COLLECTION SUMMARY".center(60))
-    print(f"{'='*60}")
-    
-    for key, value in results.items():
-        if key != 'errors' and key != 'returns_summary':
-            print(f"{key.replace('_', ' ').title()}: {value}")
-    
-    if 'returns_summary' in results and results['returns_summary']:
-        sorted_returns = sorted(results['returns_summary'], key=lambda x: x['returns'], reverse=True)
-        print(f"\n TOP PERFORMERS SINCE MONDAY:")
-        for i, item in enumerate(sorted_returns[:5]):
-            print(f"   {i+1}. {item['symbol'].ljust(5)}: {item['returns']:>7.2f}%")
-    
-    if results.get('errors'):
-        print(f"\n ERRORS:")
-        for error in results['errors'][:5]:  # Show first 5 errors
-            print(f"  • {error}")
-        if len(results['errors']) > 5:
-            print(f"  ... and {len(results['errors']) - 5} more errors")
-    
-    print(f"{'='*60}")
-
-
-async def main():
+def main():
     """Main function"""
-    parser = argparse.ArgumentParser(description="General market data collection script")
+    parser = argparse.ArgumentParser(description="Market data collection script")
     
-    # Data source arguments
-    parser.add_argument('--sp500', action='store_true', help='Include S&P 500 companies')
-    parser.add_argument('--etfs', action='store_true', help='Include index ETFs')
-    parser.add_argument('--symbols', nargs='+', help='Specific symbols to process')
-    parser.add_argument('--limit', type=int, help='Limit number of symbols (for testing)')
+    # Data collection modes
+    parser.add_argument("--all-data", action="store_true", 
+                       help="Collect all data types (stock, options, treasury, metrics)")
+    parser.add_argument("--stock-data", action="store_true", 
+                       help="Collect stock data (info, prices)")
+    parser.add_argument("--options-data", action="store_true", 
+                       help="Collect options data")
+    parser.add_argument("--treasury-data", action="store_true", 
+                       help="Collect treasury data")
+    parser.add_argument("--metrics", action="store_true", 
+                       help="Calculate options metrics")
+    parser.add_argument("--indices", action="store_true", 
+                       help="Include primary indices data")
     
-    # Data type arguments
-    parser.add_argument('--stock-data', action='store_true', help='Collect stock data (info, prices, earnings)')
-    parser.add_argument('--options-data', action='store_true', help='Collect options data')
-    parser.add_argument('--treasury-data', action='store_true', help='Collect treasury data')
-    parser.add_argument('--metrics', action='store_true', help='Calculate options metrics')
-    parser.add_argument('--all-data', action='store_true', help='Collect all data types')
+    # Data sources
+    parser.add_argument("--sp500", action="store_true", help="Include S&P 500 companies")
+    parser.add_argument("--etfs", action="store_true", help="Include index ETFs")
+    parser.add_argument("--symbols", nargs="+", help="Specific symbols to process")
+    parser.add_argument("--limit", type=int, help="Limit number of symbols (for testing)")
     
-    # Configuration arguments
-    parser.add_argument('--db-path', default="data/options/market_data.db", help='Database path')
-    parser.add_argument('--rate-limit', type=float, default=0.1, help='Rate limit delay (seconds)')
-    parser.add_argument('--max-concurrent', type=int, default=15, help='Max concurrent requests')
-    parser.add_argument('--batch-size', type=int, default=100, help='Batch size for processing')
-    parser.add_argument('--max-expiration-dates', type=int, default=30, help='Max expiration dates per symbol')
+    # Configuration
+    parser.add_argument("--db-path", default="data/options/market_data.db", help="Database path")
+    parser.add_argument("--rate-limit", type=float, default=0.1, help="Rate limit delay")
+    parser.add_argument("--max-concurrent", type=int, default=15, help="Max concurrent requests")
+    parser.add_argument("--batch-size", type=int, default=100, help="Batch size")
+    parser.add_argument("--max-expiration-dates", type=int, default=3, help="Max expiration dates")
+    parser.add_argument("--price-period", default="ytd", 
+                       choices=["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"],
+                       help="Period for stock price data collection")
     
-    # Treasury data arguments
-    parser.add_argument('--treasury-year', type=int, help='Year for treasury data')
-    parser.add_argument('--treasury-month', type=int, help='Month for treasury data')
+    # Treasury specific
+    parser.add_argument("--treasury-year", type=int, help="Year for treasury data")
+    parser.add_argument("--treasury-month", type=int, help="Month for treasury data")
+    
+    # Output
+    parser.add_argument("--output", help="Output file prefix")
     
     args = parser.parse_args()
     
     # Initialize database
     db = OptionsDatabase(args.db_path)
     
-    # Determine symbols to process
-    symbols = []
-    
-    if args.symbols:
-        symbols = [s.upper() for s in args.symbols]
-        print(f"Processing specific symbols: {symbols}")
-    else:
-        if args.sp500:
-            sp500_symbols = load_symbols_from_csv("data/sp500_companies.csv")
-            symbols.extend(sp500_symbols)
-            print(f"Loaded {len(sp500_symbols)} S&P 500 symbols")
-        
-        if args.etfs:
-            etf_symbols = load_symbols_from_csv("data/index_etfs.csv")
-            symbols.extend(etf_symbols)
-            print(f"Loaded {len(etf_symbols)} ETF symbols")
-        
-        if not symbols:
-            print("No symbols specified. Use --sp500, --etfs, or --symbols")
-            return 1
-    
-    # Apply limit if specified
-    if args.limit:
-        symbols = symbols[:args.limit]
-        print(f"Limited to {len(symbols)} symbols for testing")
-    
-    if not symbols:
-        print("No symbols to process")
-        return 1
-    
     # Determine what data to collect
     collect_stock = args.stock_data or args.all_data
     collect_options = args.options_data or args.all_data
     collect_treasury = args.treasury_data or args.all_data
     calculate_metrics = args.metrics or args.all_data
+    include_indices = args.indices or args.all_data
     
-    print(f"\n Starting data collection...")
-    print(f"Symbols: {len(symbols)}")
-    print(f"Stock data: {'' if collect_stock else ''}")
-    print(f"Options data: {'' if collect_options else ''}")
-    print(f"Treasury data: {'' if collect_treasury else ''}")
-    print(f"Metrics calculation: {'' if calculate_metrics else ''}")
+    # If no specific data type specified, show help
+    if not any([collect_stock, collect_options, collect_treasury, calculate_metrics]):
+        print(" No data type specified. Use --stock-data, --options-data, --treasury-data, --metrics, or --all-data")
+        parser.print_help()
+        return 1
     
-    # Initialize scrapers
-    yahoo_scraper = YahooScraper(rate_limit_delay=args.rate_limit)
-    monday_date = get_monday_date()
+    # Determine symbols to process
+    symbols = []
+    
+    if args.symbols:
+        symbols = args.symbols
+    elif args.sp500:
+        # Load S&P 500 symbols
+        try:
+            import pandas as pd
+            sp500_df = pd.read_csv("data/sp500_companies.csv")
+            symbols = sp500_df['Symbol'].tolist()
+            print(f"Loaded {len(symbols)} S&P 500 symbols")
+        except Exception as e:
+            print(f"Error loading S&P 500 symbols: {e}")
+            return 1
+    elif args.etfs:
+        # Load ETF symbols
+        try:
+            import pandas as pd
+            etf_df = pd.read_csv("data/index_etfs.csv")
+            symbols = etf_df['ticker'].tolist()
+            print(f"Loaded {len(symbols)} ETF symbols")
+        except Exception as e:
+            print(f"Error loading ETF symbols: {e}")
+            return 1
+    else:
+        # Default to S&P 500
+        try:
+            import pandas as pd
+            sp500_df = pd.read_csv("data/sp500_companies.csv")
+            symbols = sp500_df['Symbol'].tolist()
+            print(f"Loaded {len(symbols)} S&P 500 symbols")
+        except Exception as e:
+            print(f"Error loading S&P 500 symbols: {e}")
+            return 1
+    
+    # Add indices symbols if requested
+    if include_indices:
+        indices_symbols = load_indices_symbols()
+        symbols.extend(indices_symbols)
+        print(f"Added {len(indices_symbols)} indices symbols")
+    
+    # Apply limit if specified
+    if args.limit:
+        symbols = symbols[:args.limit]
+        print(f"Limited to {len(symbols)} symbols")
+    
+    print(f"Total symbols to process: {len(symbols)}")
+    
+    # Collection statistics
+    total_stats = {
+        'stock_info_collected': 0,
+        'stock_prices_collected': 0,
+        'options_collected': 0,
+        'treasury_records_collected': 0,
+        'metrics_calculated': 0,
+        'total_errors': 0
+    }
     
     try:
         # Collect stock data
         if collect_stock:
-            stock_results = collect_stock_data(db, yahoo_scraper, symbols, monday_date, args.rate_limit)
-            print_summary(stock_results, "Stock Data")
+            stock_stats = collect_stock_data(symbols, db, args.rate_limit, args.max_concurrent, args.price_period)
+            total_stats.update(stock_stats)
+            total_stats['total_errors'] += stock_stats.get('errors', 0)
         
         # Collect options data
         if collect_options:
-            options_results = await collect_options_data(
-                db, symbols, 
-                max_expiration_dates=args.max_expiration_dates,
-                rate_limit_delay=args.rate_limit,
-                max_concurrent=args.max_concurrent,
-                batch_size=args.batch_size
-            )
-            print_summary(options_results, "Options Data")
+            options_stats = collect_options_data(symbols, db, args.rate_limit, args.max_expiration_dates)
+            total_stats['options_collected'] += options_stats.get('options_collected', 0)
+            total_stats['total_errors'] += options_stats.get('errors', 0)
         
         # Collect treasury data
         if collect_treasury:
-            treasury_results = collect_treasury_data(db, args.treasury_year, args.treasury_month)
-            print_summary(treasury_results, "Treasury Data")
+            treasury_stats = collect_treasury_data(db, args.treasury_year, args.treasury_month)
+            total_stats['treasury_records_collected'] += treasury_stats.get('treasury_records_collected', 0)
+            total_stats['total_errors'] += treasury_stats.get('errors', 0)
         
-        # Calculate metrics
+        # Calculate options metrics
         if calculate_metrics:
-            metrics_results = calculate_options_metrics(db, symbols)
-            print_summary(metrics_results, "Options Metrics")
+            metrics_stats = calculate_options_metrics(db)
+            total_stats['metrics_calculated'] += metrics_stats.get('metrics_calculated', 0)
+            total_stats['total_errors'] += metrics_stats.get('errors', 0)
         
-        print(f"\n Data collection completed successfully!")
+        # Print final statistics
+        print(f"\n COLLECTION COMPLETED")
+        print("="*60)
+        print(f"Stock info records: {total_stats['stock_info_collected']}")
+        print(f"Stock price records: {total_stats['stock_prices_collected']}")
+        print(f"Options contracts: {total_stats['options_collected']}")
+        print(f"Treasury records: {total_stats['treasury_records_collected']}")
+        print(f"Metrics calculated: {total_stats['metrics_calculated']}")
+        print(f"Total errors: {total_stats['total_errors']}")
+        print("="*60)
         
-    except KeyboardInterrupt:
-        print(f"\n Interrupted by user")
-        return 1
+        # Show database statistics
+        print(f"\n DATABASE STATISTICS")
+        print("="*60)
+        db_stats = db.get_database_stats()
+        for key, value in db_stats.items():
+            print(f"{key}: {value}")
+        print("="*60)
+        
     except Exception as e:
-        print(f" Unexpected error: {e}")
+        print(f" Error during collection: {e}")
         import traceback
         traceback.print_exc()
         return 1
@@ -444,4 +440,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    exit(asyncio.run(main()))
+    exit(main())

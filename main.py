@@ -66,7 +66,7 @@ def main():
     
     # Data collection modes
     parser.add_argument("--collect-all", action="store_true", 
-                       help="Collect all data types (stock, options, treasury, metrics)")
+                       help="Collect all data types (stock, options, treasury, metrics, indices)")
     parser.add_argument("--collect-stock", action="store_true", 
                        help="Collect stock data (info, prices, earnings)")
     parser.add_argument("--collect-options", action="store_true", 
@@ -79,6 +79,7 @@ def main():
     # Data sources
     parser.add_argument("--sp500", action="store_true", help="Include S&P 500 companies")
     parser.add_argument("--etfs", action="store_true", help="Include index ETFs")
+    parser.add_argument("--indices", action="store_true", help="Include primary indices")
     parser.add_argument("--symbols", nargs="+", help="Specific symbols to process")
     parser.add_argument("--limit", type=int, help="Limit number of symbols (for testing)")
     
@@ -86,6 +87,7 @@ def main():
     parser.add_argument("--query-all", action="store_true", help="Query all data types")
     parser.add_argument("--query-options", action="store_true", help="Query options data")
     parser.add_argument("--query-stock", action="store_true", help="Query stock data")
+    parser.add_argument("--query-stock-info", action="store_true", help="Query stock info")
     parser.add_argument("--query-treasury", action="store_true", help="Query treasury data")
     parser.add_argument("--query-metrics", action="store_true", help="Query options metrics")
     
@@ -95,6 +97,9 @@ def main():
     parser.add_argument("--max-concurrent", type=int, default=15, help="Max concurrent requests")
     parser.add_argument("--batch-size", type=int, default=100, help="Batch size")
     parser.add_argument("--max-expiration-dates", type=int, default=30, help="Max expiration dates")
+    parser.add_argument("--price-period", default="ytd", 
+                       choices=["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"],
+                       help="Period for stock price data collection (default: ytd for year-to-date)")
     
     # Treasury specific
     parser.add_argument("--treasury-year", type=int, help="Year for treasury data")
@@ -121,69 +126,81 @@ def main():
         show_database_stats(args.db_path)
         if not any([args.collect_all, args.collect_stock, args.collect_options, 
                    args.collect_treasury, args.calculate_metrics, args.query_all,
-                   args.query_options, args.query_stock, args.query_treasury, args.query_metrics]):
+                   args.query_options, args.query_stock, args.query_stock_info, args.query_treasury, args.query_metrics]):
             return 0
     
     # Determine what to do
     collect_data = any([args.collect_all, args.collect_stock, args.collect_options, 
                        args.collect_treasury, args.calculate_metrics])
     query_data = any([args.query_all, args.query_options, args.query_stock, 
-                     args.query_treasury, args.query_metrics])
+                     args.query_stock_info, args.query_treasury, args.query_metrics])
     
     if not collect_data and not query_data:
         print(" No action specified. Use --collect-* or --query-* options")
         parser.print_help()
         return 1
     
-    # Build common arguments
-    common_args = [
+    # Build collection-specific arguments
+    collect_args = [
         "--db-path", args.db_path,
         "--rate-limit", str(args.rate_limit),
         "--max-concurrent", str(args.max_concurrent),
-        "--batch-size", str(args.batch_size)
+        "--batch-size", str(args.batch_size),
+        "--price-period", args.price_period
     ]
     
     if args.symbols:
-        common_args.extend(["--symbols"] + args.symbols)
+        collect_args.extend(["--symbols"] + args.symbols)
     elif args.sp500:
-        common_args.append("--sp500")
+        collect_args.append("--sp500")
     elif args.etfs:
-        common_args.append("--etfs")
+        collect_args.append("--etfs")
+    elif args.indices:
+        collect_args.append("--indices")
+    else:
+        # Default to S&P 500 if no data source specified
+        collect_args.append("--sp500")
     
     if args.limit:
-        common_args.extend(["--limit", str(args.limit)])
+        collect_args.extend(["--limit", str(args.limit)])
     
     if args.output:
-        common_args.extend(["--output", args.output])
+        collect_args.extend(["--output", args.output])
+    
+    # Build query-specific arguments
+    query_args = ["--db-path", args.db_path]
+    
+    if args.output:
+        query_args.extend(["--output", args.output])
     
     # Data Collection
     if collect_data:
         print(" Starting data collection...")
         
         # Build collect_data.py arguments
-        collect_args = ["scripts/collect_data.py"] + common_args
+        collect_script_args = ["scripts/collect_data.py"] + collect_args
         
         if args.collect_all:
-            collect_args.append("--all-data")
+            collect_script_args.append("--all-data")
         else:
             if args.collect_stock:
-                collect_args.append("--stock-data")
+                collect_script_args.append("--stock-data")
             if args.collect_options:
-                collect_args.append("--options-data")
+                collect_script_args.append("--options-data")
             if args.collect_treasury:
-                collect_args.append("--treasury-data")
+                collect_script_args.append("--treasury-data")
             if args.calculate_metrics:
-                collect_args.append("--metrics")
+                collect_script_args.append("--metrics")
         
         if args.treasury_year:
-            collect_args.extend(["--treasury-year", str(args.treasury_year)])
+            collect_script_args.extend(["--treasury-year", str(args.treasury_year)])
         if args.treasury_month:
-            collect_args.extend(["--treasury-month", str(args.treasury_month)])
+            collect_script_args.extend(["--treasury-month", str(args.treasury_month)])
         
-        collect_args.extend(["--max-expiration-dates", str(args.max_expiration_dates)])
+        collect_script_args.extend(["--max-expiration-dates", str(args.max_expiration_dates)])
         
         # Run data collection
-        exit_code = run_script("scripts/collect_data.py", collect_args[1:])  # Skip script name
+        exit_code = run_script("scripts/collect_data.py", collect_script_args[1:])  # Skip script name
         if exit_code != 0:
             print(f" Data collection failed with exit code {exit_code}")
             return exit_code
@@ -195,40 +212,42 @@ def main():
         print("\n Starting data querying...")
         
         # Build query_data.py arguments
-        query_args = ["scripts/query_data.py"] + common_args
+        query_script_args = ["scripts/query_data.py"] + query_args
         
         if args.query_all:
-            query_args.append("--all")
+            query_script_args.append("--all")
         else:
             if args.query_options:
-                query_args.append("--options")
+                query_script_args.append("--options")
             if args.query_stock:
-                query_args.append("--stock-prices")
+                query_script_args.append("--stock-prices")
+            if args.query_stock_info:
+                query_script_args.append("--stock-info")
             if args.query_treasury:
-                query_args.append("--treasury")
+                query_script_args.append("--treasury")
             if args.query_metrics:
-                query_args.append("--metrics")
+                query_script_args.append("--metrics")
         
         # Add query filters
         if args.symbol:
-            query_args.extend(["--symbol", args.symbol])
+            query_script_args.extend(["--symbol", args.symbol])
         if args.expiration:
-            query_args.extend(["--expiration", args.expiration])
+            query_script_args.extend(["--expiration", args.expiration])
         if args.type:
-            query_args.extend(["--type", args.type])
+            query_script_args.extend(["--type", args.type])
         if args.moneyness:
-            query_args.extend(["--moneyness", args.moneyness])
+            query_script_args.extend(["--moneyness", args.moneyness])
         if args.min_volume:
-            query_args.extend(["--min-volume", str(args.min_volume)])
+            query_script_args.extend(["--min-volume", str(args.min_volume)])
         if args.start_date:
-            query_args.extend(["--start-date", args.start_date])
+            query_script_args.extend(["--start-date", args.start_date])
         if args.end_date:
-            query_args.extend(["--end-date", args.end_date])
+            query_script_args.extend(["--end-date", args.end_date])
         if args.limit_results:
-            query_args.extend(["--limit", str(args.limit_results)])
+            query_script_args.extend(["--limit", str(args.limit_results)])
         
         # Run data querying
-        exit_code = run_script("scripts/query_data.py", query_args[1:])  # Skip script name
+        exit_code = run_script("scripts/query_data.py", query_script_args[1:])  # Skip script name
         if exit_code != 0:
             print(f" Data querying failed with exit code {exit_code}")
             return exit_code

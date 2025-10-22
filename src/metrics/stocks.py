@@ -19,22 +19,6 @@ def calculate_volatility(prices: pd.Series) -> float:
     return returns.std() * (252 ** 0.5)  # Annualized volatility
 
 
-def determine_trend(prices: pd.Series) -> str:
-    """Determine price trend"""
-    if len(prices) < 2:
-        return 'Unknown'
-    
-    first_price = prices.iloc[0]
-    last_price = prices.iloc[-1]
-    
-    if last_price > first_price * 1.05:  # 5% threshold
-        return 'Uptrend'
-    elif last_price < first_price * 0.95:  # 5% threshold
-        return 'Downtrend'
-    else:
-        return 'Sideways'
-
-
 def calculate_price_change(current_price: float, previous_price: float) -> float:
     """Calculate absolute price change"""
     return current_price - previous_price
@@ -52,9 +36,26 @@ def calculate_simple_moving_average(prices: pd.Series, window: int = 20) -> pd.S
     return prices.rolling(window=window).mean()
 
 
-def calculate_exponential_moving_average(prices: pd.Series, span: int = 20) -> pd.Series:
+def determine_trend(prices: pd.Series, window: int = 20) -> str:
+    """Determine trend direction based on moving average"""
+    if len(prices) < window:
+        return "insufficient_data"
+    
+    sma = calculate_simple_moving_average(prices, window)
+    current_price = prices.iloc[-1]
+    current_sma = sma.iloc[-1]
+    
+    if current_price > current_sma * 1.02:  # 2% above SMA
+        return "uptrend"
+    elif current_price < current_sma * 0.98:  # 2% below SMA
+        return "downtrend"
+    else:
+        return "sideways"
+
+
+def calculate_exponential_moving_average(prices: pd.Series, window: int = 20) -> pd.Series:
     """Calculate exponential moving average"""
-    return prices.ewm(span=span).mean()
+    return prices.ewm(span=window).mean()
 
 
 def calculate_rsi(prices: pd.Series, window: int = 14) -> pd.Series:
@@ -62,20 +63,21 @@ def calculate_rsi(prices: pd.Series, window: int = 14) -> pd.Series:
     delta = prices.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
+    
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     return rsi
 
 
-def calculate_bollinger_bands(prices: pd.Series, window: int = 20, num_std: float = 2) -> Dict[str, pd.Series]:
+def calculate_bollinger_bands(prices: pd.Series, window: int = 20, std_dev: float = 2) -> Dict[str, pd.Series]:
     """Calculate Bollinger Bands"""
     sma = calculate_simple_moving_average(prices, window)
     std = prices.rolling(window=window).std()
     
     return {
-        'upper': sma + (std * num_std),
+        'upper': sma + (std * std_dev),
         'middle': sma,
-        'lower': sma - (std * num_std)
+        'lower': sma - (std * std_dev)
     }
 
 

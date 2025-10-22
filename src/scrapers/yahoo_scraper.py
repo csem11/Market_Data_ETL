@@ -253,6 +253,59 @@ class YahooScraper:
         
         return results
     
+    def get_stock_price_history_ytd(self, symbol: str, interval: str = "1d") -> List[StockPrices]:
+        """
+        Get stock price history for a symbol from January 1st of current year to present
+        
+        Args:
+            symbol: Stock symbol
+            interval: Data interval (1m, 2m, 5m, 15m, 30m, 60m, 90m, 1h, 1d, 5d, 1wk, 1mo, 3mo)
+            
+        Returns:
+            List of StockPrices objects
+        """
+        try:
+            self._rate_limit()
+            ticker = yf.Ticker(symbol)
+            
+            # Get current year
+            current_year = datetime.now().year
+            start_date = f"{current_year}-01-01"
+            end_date = datetime.now().strftime("%Y-%m-%d")
+            
+            hist = ticker.history(start=start_date, end=end_date, interval=interval)
+            
+            if hist.empty:
+                print(f"No price history data available for {symbol} from {start_date} to {end_date}")
+                return []
+            
+            stock_prices = []
+            for date, row in hist.iterrows():
+                # Convert pandas Timestamp to date
+                if hasattr(date, 'date'):
+                    date_obj = date.date()
+                else:
+                    date_obj = date.date()
+                
+                stock_price = StockPrices(
+                    symbol=symbol.upper(),
+                    date=date_obj,
+                    open_price=float(row['Open']) if pd.notna(row['Open']) else None,
+                    high_price=float(row['High']) if pd.notna(row['High']) else None,
+                    low_price=float(row['Low']) if pd.notna(row['Low']) else None,
+                    close_price=float(row['Close']) if pd.notna(row['Close']) else None,
+                    volume=int(row['Volume']) if pd.notna(row['Volume']) else None,
+                    adjusted_close=float(row['Close']) if pd.notna(row['Close']) else None
+                )
+                stock_prices.append(stock_price)
+            
+            print(f"Retrieved {len(stock_prices)} YTD price history records for {symbol} ({start_date} to {end_date})")
+            return stock_prices
+            
+        except Exception as e:
+            print(f"Error fetching YTD price history for {symbol}: {e}")
+            return []
+
     def get_stock_price_history(self, symbol: str, period: str = "1y", interval: str = "1d") -> List[StockPrices]:
         """
         Get stock price history for a symbol
